@@ -119,7 +119,7 @@ Markdown 파일 (`results/` 디렉토리) → GitHub에서 바로 확인 가능.
 | `openai` 라이브러리 버전 | 자동 |
 | `openai` azure 확장 버전 | 자동 |
 | 테스트 시각 | 자동 |
-| 테스트 위치 / 네트워크 | 수동 (환경변수 `TEST_LOCATION`) |
+| Azure 리전 | 자동 (엔드포인트에서 추출) |
 
 ## 환경변수
 
@@ -132,9 +132,6 @@ AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_ENDPOINT=
 AZURE_OPENAI_DEPLOYMENT_NAME=
 AZURE_OPENAI_API_VERSION=
-
-# 테스트 환경 메모 (결과에 기록됨)
-TEST_LOCATION=예: 서울 사무실, 사내망
 ```
 
 ## 파일 구조
