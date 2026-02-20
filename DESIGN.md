@@ -10,8 +10,8 @@
 | 엔드포인트 | 라이브러리 | 설명 |
 |-----------|-----------|------|
 | OpenAI 직접 | `openai` | OpenAI API 직접 호출 |
-| AOAI (openai lib) | `openai` | Azure OpenAI를 openai 라이브러리로 호출 |
-| AOAI (azure lib) | `openai` + azure 확장 | Azure OpenAI를 azure-openai 방식으로 호출 |
+| AOAI (openai lib) | `openai` | Azure OpenAI를 openai 라이브러리 + API 키로 호출 |
+| AOAI (azure lib) | `openai` + `azure-identity` | Azure OpenAI를 Azure AD 토큰 인증으로 호출 |
 
 > 사내 AI 서비스는 웹 기반이라 API 비교 불가. 추후 별도 측정 예정.
 
@@ -117,7 +117,7 @@ Markdown 파일 (`results/` 디렉토리) → GitHub에서 바로 확인 가능.
 | OS / 버전 | 자동 |
 | Python 버전 | 자동 |
 | `openai` 라이브러리 버전 | 자동 |
-| `openai` azure 확장 버전 | 자동 |
+| `azure-identity` 버전 | 자동 |
 | 테스트 시각 | 자동 |
 | Azure 리전 | 자동 (엔드포인트에서 추출) |
 

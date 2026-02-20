@@ -48,9 +48,24 @@ def make_openai_client() -> OpenAI:
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
-def make_azure_client() -> AzureOpenAI:
+def make_azure_client_apikey() -> AzureOpenAI:
+    """AOAI (openai lib) — API 키 인증."""
     return AzureOpenAI(
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+    )
+
+
+def make_azure_client_ad() -> AzureOpenAI:
+    """AOAI (azure lib) — azure-identity 토큰 인증."""
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+    credential = DefaultAzureCredential()
+    token_provider = get_bearer_token_provider(
+        credential, "https://cognitiveservices.azure.com/.default",
+    )
+    return AzureOpenAI(
+        azure_ad_token_provider=token_provider,
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_version=os.environ["AZURE_OPENAI_API_VERSION"],
     )
@@ -126,12 +141,16 @@ def run_benchmark():
 
     # 환경 체크
     has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    has_azure = all(os.environ.get(k) for k in [
+    has_azure_key = all(os.environ.get(k) for k in [
         "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_DEPLOYMENT_NAME", "AZURE_OPENAI_API_VERSION",
     ])
+    has_azure_ad = all(os.environ.get(k) for k in [
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_DEPLOYMENT_NAME", "AZURE_OPENAI_API_VERSION",
+    ])
 
-    if not has_openai and not has_azure:
+    if not has_openai and not has_azure_key and not has_azure_ad:
         print("❌ .env에 OpenAI 또는 Azure OpenAI 키를 설정해 주세요.")
         print("   .env.example 파일을 참고하세요.")
         sys.exit(1)
@@ -145,13 +164,17 @@ def run_benchmark():
     if has_openai:
         clients["openai"] = make_openai_client()
         models["openai"] = "gpt-4.1"
-    if has_azure:
-        azure_client = make_azure_client()
-        clients["aoai_openai"] = azure_client
-        clients["aoai_azure"] = azure_client
-        deploy = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
+    deploy = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "")
+    if has_azure_key:
+        clients["aoai_openai"] = make_azure_client_apikey()
         models["aoai_openai"] = deploy
-        models["aoai_azure"] = deploy
+    if has_azure_ad:
+        try:
+            clients["aoai_azure"] = make_azure_client_ad()
+            models["aoai_azure"] = deploy
+            print("✓ Azure AD 인증 클라이언트 생성 완료 (az login 필요)")
+        except Exception as e:
+            print(f"⚠ Azure AD 인증 건너뜀 (az login 필요): {e}")
 
     # 사용 불가능한 엔드포인트 필터링
     combos = [c for c in combos if c[0] in clients]
@@ -235,6 +258,11 @@ def collect_env_info(has_openai: bool, has_azure: bool) -> str:
     try:
         import openai as _openai
         lines.append(f"| openai 라이브러리 | {_openai.__version__} |")
+    except Exception:
+        pass
+    try:
+        import azure.identity as _azid
+        lines.append(f"| azure-identity | {_azid.__version__} |")
     except Exception:
         pass
     lines.append(f"| 테스트 시각 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} |")
