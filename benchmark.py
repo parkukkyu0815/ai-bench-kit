@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """AI Service Benchmark — .env만 설정하면 딸깍으로 결과 확인."""
 
+import json
 import os
 import re
 import sys
@@ -83,12 +84,15 @@ def call_chat(client, model: str, system: str, user: str, tools: list | None):
         kwargs["tools"] = tools
     t0 = time.perf_counter()
     ttft = None
+    chunks = []
     with client.chat.completions.create(**kwargs) as stream:
         for chunk in stream:
-            if ttft is None and chunk.choices and chunk.choices[0].delta.content:
-                ttft = time.perf_counter() - t0
+            if chunk.choices and chunk.choices[0].delta.content:
+                if ttft is None:
+                    ttft = time.perf_counter() - t0
+                chunks.append(chunk.choices[0].delta.content)
     total = time.perf_counter() - t0
-    return ttft or total, total
+    return ttft or total, total, "".join(chunks)
 
 
 def call_responses(client, model: str, system: str, user: str, tools: list | None):
@@ -103,12 +107,15 @@ def call_responses(client, model: str, system: str, user: str, tools: list | Non
         kwargs["tools"] = tools
     t0 = time.perf_counter()
     ttft = None
+    chunks = []
     with client.responses.create(**kwargs) as stream:
         for event in stream:
-            if ttft is None and getattr(event, "type", "") == "response.output_text.delta":
-                ttft = time.perf_counter() - t0
+            if getattr(event, "type", "") == "response.output_text.delta":
+                if ttft is None:
+                    ttft = time.perf_counter() - t0
+                chunks.append(getattr(event, "delta", ""))
     total = time.perf_counter() - t0
-    return ttft or total, total
+    return ttft or total, total, "".join(chunks)
 
 
 def call_chat_azure_inference(client, _model: str, system: str, user: str, tools: list | None):
@@ -121,12 +128,15 @@ def call_chat_azure_inference(client, _model: str, system: str, user: str, tools
         kwargs["tools"] = tools
     t0 = time.perf_counter()
     ttft = None
+    chunks = []
     response = client.complete(**kwargs)
     for chunk in response:
-        if ttft is None and chunk.choices and chunk.choices[0].delta.content:
-            ttft = time.perf_counter() - t0
+        if chunk.choices and chunk.choices[0].delta.content:
+            if ttft is None:
+                ttft = time.perf_counter() - t0
+            chunks.append(chunk.choices[0].delta.content)
     total = time.perf_counter() - t0
-    return ttft or total, total
+    return ttft or total, total, "".join(chunks)
 
 
 # ── 조합 생성 ─────────────────────────────────────────
@@ -189,7 +199,7 @@ def run_benchmark():
     models = {}
     if has_openai:
         clients["openai"] = make_openai_client()
-        models["openai"] = "gpt-4.1"
+        models["openai"] = "gpt-5-chat"
     if has_azure:
         deploy = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
         clients["aoai_openai"] = make_azure_openai_client()
@@ -234,8 +244,8 @@ def run_benchmark():
                 done += 1
                 label = f"[{done}/{total_calls}] {ENDPOINT_LABELS[ep]} | {API_LABELS[api]} | {PROMPT_LABELS[prompt_key]} | 도구={TOOL_LABELS[use_tool]} | {q_id} #{r+1}"
                 try:
-                    ttft, total = call_fn(client, model, system, q_text, tools)
-                    q_measurements.append((ttft, total))
+                    ttft, total, text = call_fn(client, model, system, q_text, tools)
+                    q_measurements.append((ttft, total, text))
                     print(f"  ✓ {label} — TTFT={ttft:.3f}s  Total={total:.3f}s")
                 except Exception as e:
                     print(f"  ✗ {label} — {e}")
@@ -243,14 +253,22 @@ def run_benchmark():
 
         results[combo] = combo_results
 
-    # 결과 리포트 생성
-    report = generate_report(results, has_openai, has_azure)
+    # 결과 저장
     results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # 1) 기존 통계 리포트
+    report = generate_report(results, has_openai, has_azure)
     out_path = results_dir / f"benchmark_{ts}.md"
     out_path.write_text(report, encoding="utf-8")
-    print(f"\n📊 결과 저장: {out_path}")
+    print(f"\n📊 통계 리포트: {out_path}")
+
+    # 2) raw 결과 JSON + 질문별 비교 마크다운
+    raw_path = save_raw_results(results, models, results_dir, ts)
+    print(f"📦 Raw 결과: {raw_path}")
+    compare_path = save_comparison(results, models, results_dir, ts)
+    print(f"🔍 비교용 파일: {compare_path}")
 
 
 # ── 통계 헬퍼 ─────────────────────────────────────────
@@ -269,6 +287,81 @@ def stats(values: list[float]) -> dict:
 
 def fmt(v: float) -> str:
     return f"{v:.3f}"
+
+
+def combo_label(combo: tuple) -> str:
+    ep, api, prompt_key, use_tool = combo
+    return f"{ENDPOINT_LABELS[ep]} | {API_LABELS[api]} | {PROMPT_LABELS[prompt_key]} | 도구={TOOL_LABELS[use_tool]}"
+
+
+def save_raw_results(results: dict, models: dict, results_dir: Path, ts: str) -> Path:
+    """전체 raw 결과를 구조화된 JSON으로 저장."""
+    q_map = {q[0]: {"difficulty": q[1], "text": q[2]} for q in QUESTIONS}
+    records = []
+    for combo, q_results in results.items():
+        ep, api, prompt_key, use_tool = combo
+        for q_id, measurements in q_results.items():
+            for i, (ttft, total, text) in enumerate(measurements):
+                records.append({
+                    "endpoint": ep,
+                    "endpoint_label": ENDPOINT_LABELS[ep],
+                    "model": models.get(ep, ""),
+                    "api": api,
+                    "api_label": API_LABELS[api],
+                    "prompt": prompt_key,
+                    "prompt_label": PROMPT_LABELS[prompt_key],
+                    "tool": use_tool,
+                    "question_id": q_id,
+                    "question_difficulty": q_map[q_id]["difficulty"],
+                    "question_text": q_map[q_id]["text"],
+                    "repeat": i + 1,
+                    "ttft": round(ttft, 4),
+                    "total": round(total, 4),
+                    "response": text,
+                })
+    out = results_dir / f"raw_{ts}.json"
+    out.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def save_comparison(results: dict, models: dict, results_dir: Path, ts: str) -> Path:
+    """질문별로 모든 조합의 응답을 나란히 보여주는 비교용 마크다운 생성."""
+    lines = ["# 질문별 응답 비교", ""]
+    lines.append(f"> 생성: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    lines.append("같은 질문에 대한 각 조합의 응답을 나란히 비교할 수 있습니다.")
+    lines.append("다른 AI 모델에게 이 파일을 전달하여 품질 평가를 요청할 수 있습니다.")
+    lines.append("")
+
+    for q_id, q_diff, q_text in QUESTIONS:
+        lines.append(f"---")
+        lines.append(f"## {q_id} ({q_diff})")
+        lines.append(f"")
+        lines.append(f"**질문:** {q_text}")
+        lines.append("")
+
+        for combo, q_results in results.items():
+            if q_id not in q_results or not q_results[q_id]:
+                continue
+            ep = combo[0]
+            tag = combo_label(combo)
+            measurements = q_results[q_id]
+
+            lines.append(f"### {tag}")
+            lines.append(f"- 모델: `{models.get(ep, '')}`")
+            lines.append("")
+
+            for i, (ttft, total, text) in enumerate(measurements):
+                lines.append(f"<details><summary>반복 {i+1} — TTFT {ttft:.3f}s, Total {total:.3f}s</summary>")
+                lines.append("")
+                lines.append(text)
+                lines.append("")
+                lines.append("</details>")
+                lines.append("")
+
+    out = results_dir / f"compare_{ts}.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
 
 
 def stats_row(label: str, values: list[float]) -> str:
