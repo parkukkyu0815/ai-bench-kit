@@ -48,8 +48,8 @@ def make_openai_client() -> OpenAI:
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
-def make_azure_client_apikey() -> AzureOpenAI:
-    """AOAI (openai lib) — API 키 인증."""
+def make_azure_openai_client() -> AzureOpenAI:
+    """AOAI (openai lib) — openai 라이브러리의 AzureOpenAI 클래스."""
     return AzureOpenAI(
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
@@ -57,24 +57,26 @@ def make_azure_client_apikey() -> AzureOpenAI:
     )
 
 
-def make_azure_client_ad() -> AzureOpenAI:
-    """AOAI (azure lib) — azure-identity 토큰 인증."""
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-    credential = DefaultAzureCredential()
-    token_provider = get_bearer_token_provider(
-        credential, "https://cognitiveservices.azure.com/.default",
-    )
-    return AzureOpenAI(
-        azure_ad_token_provider=token_provider,
-        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+def make_azure_inference_client():
+    """AOAI (azure lib) — azure-ai-inference SDK의 ChatCompletionsClient."""
+    from azure.ai.inference import ChatCompletionsClient
+    from azure.core.credentials import AzureKeyCredential
+
+    endpoint = os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/")
+    deploy = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
+    api_ver = os.environ["AZURE_OPENAI_API_VERSION"]
+
+    return ChatCompletionsClient(
+        endpoint=f"{endpoint}/openai/deployments/{deploy}",
+        credential=AzureKeyCredential(os.environ["AZURE_OPENAI_API_KEY"]),
+        api_version=api_ver,
     )
 
 
 # ── 스트리밍 호출 + 측정 ──────────────────────────────
 
 def call_chat(client, model: str, system: str, user: str, tools: list | None):
-    """Chat Completions API — 스트리밍."""
+    """Chat Completions API (openai lib) — 스트리밍."""
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     kwargs = dict(model=model, messages=msgs, stream=True)
     if tools:
@@ -90,7 +92,7 @@ def call_chat(client, model: str, system: str, user: str, tools: list | None):
 
 
 def call_responses(client, model: str, system: str, user: str, tools: list | None):
-    """Responses API — 스트리밍."""
+    """Responses API (openai lib) — 스트리밍."""
     kwargs = dict(
         model=model,
         instructions=system,
@@ -109,6 +111,24 @@ def call_responses(client, model: str, system: str, user: str, tools: list | Non
     return ttft or total, total
 
 
+def call_chat_azure_inference(client, _model: str, system: str, user: str, tools: list | None):
+    """Chat Completions (azure-ai-inference SDK) — 스트리밍."""
+    from azure.ai.inference.models import SystemMessage, UserMessage
+
+    msgs = [SystemMessage(content=system), UserMessage(content=user)]
+    kwargs = dict(messages=msgs, stream=True)
+    if tools:
+        kwargs["tools"] = tools
+    t0 = time.perf_counter()
+    ttft = None
+    response = client.complete(**kwargs)
+    for chunk in response:
+        if ttft is None and chunk.choices and chunk.choices[0].delta.content:
+            ttft = time.perf_counter() - t0
+    total = time.perf_counter() - t0
+    return ttft or total, total
+
+
 # ── 조합 생성 ─────────────────────────────────────────
 
 ENDPOINT_LABELS = {
@@ -121,17 +141,28 @@ API_LABELS = {"chat": "Chat Completions", "responses": "Responses API"}
 PROMPT_LABELS = {"short": "짧은 프롬프트", "long": "긴 보안 프롬프트"}
 TOOL_LABELS = {False: "OFF", True: "ON"}
 
+# azure-ai-inference는 Chat Completions만 지원
+ENDPOINT_SUPPORTED_APIS = {
+    "openai": {"chat", "responses"},
+    "aoai_openai": {"chat", "responses"},
+    "aoai_azure": {"chat"},
+}
+
 CODE_INTERPRETER_TOOL_CHAT = [{"type": "function", "function": {"name": "code_interpreter", "description": "Run code", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}}}}]
 CODE_INTERPRETER_TOOL_RESPONSES = [{"type": "code_interpreter"}]
 
 
 def build_combos():
-    """24가지 조합 생성."""
+    """조합 생성 (엔드포인트별 지원 API 필터링)."""
     endpoints = list(ENDPOINT_LABELS.keys())
     apis = list(API_LABELS.keys())
     prompts = list(PROMPT_LABELS.keys())
     use_tools = [False, True]
-    return list(product(endpoints, apis, prompts, use_tools))
+    combos = []
+    for ep, api, prompt_key, use_tool in product(endpoints, apis, prompts, use_tools):
+        if api in ENDPOINT_SUPPORTED_APIS.get(ep, set()):
+            combos.append((ep, api, prompt_key, use_tool))
+    return combos
 
 
 # ── 메인 벤치마크 ─────────────────────────────────────
@@ -141,22 +172,17 @@ def run_benchmark():
 
     # 환경 체크
     has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    has_azure_key = all(os.environ.get(k) for k in [
+    has_azure = all(os.environ.get(k) for k in [
         "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_DEPLOYMENT_NAME", "AZURE_OPENAI_API_VERSION",
     ])
-    has_azure_ad = all(os.environ.get(k) for k in [
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_OPENAI_DEPLOYMENT_NAME", "AZURE_OPENAI_API_VERSION",
-    ])
 
-    if not has_openai and not has_azure_key and not has_azure_ad:
+    if not has_openai and not has_azure:
         print("❌ .env에 OpenAI 또는 Azure OpenAI 키를 설정해 주세요.")
         print("   .env.example 파일을 참고하세요.")
         sys.exit(1)
 
     prompts = load_prompts()
-    combos = build_combos()
 
     # 클라이언트 준비
     clients = {}
@@ -164,22 +190,20 @@ def run_benchmark():
     if has_openai:
         clients["openai"] = make_openai_client()
         models["openai"] = "gpt-4.1"
-    deploy = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "")
-    if has_azure_key:
-        clients["aoai_openai"] = make_azure_client_apikey()
+    if has_azure:
+        deploy = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
+        clients["aoai_openai"] = make_azure_openai_client()
         models["aoai_openai"] = deploy
-    if has_azure_ad:
-        try:
-            clients["aoai_azure"] = make_azure_client_ad()
-            models["aoai_azure"] = deploy
-            print("✓ Azure AD 인증 클라이언트 생성 완료 (az login 필요)")
-        except Exception as e:
-            print(f"⚠ Azure AD 인증 건너뜀 (az login 필요): {e}")
+        clients["aoai_azure"] = make_azure_inference_client()
+        models["aoai_azure"] = deploy
 
-    # 사용 불가능한 엔드포인트 필터링
-    combos = [c for c in combos if c[0] in clients]
+    # 사용 가능한 조합만 필터링
+    combos = [c for c in build_combos() if c[0] in clients]
     total_calls = len(combos) * len(QUESTIONS) * REPEAT
+
     print(f"🚀 벤치마크 시작 — {len(combos)}개 조합 × {len(QUESTIONS)}문항 × {REPEAT}회 = {total_calls}회 호출")
+    if has_azure:
+        print(f"   ℹ AOAI (azure lib)은 Chat Completions만 지원 → Responses API 제외")
 
     # 결과 저장: results[combo_key][q_id] = [(ttft, total), ...]
     results: dict[tuple, dict[str, list]] = {}
@@ -191,8 +215,11 @@ def run_benchmark():
         model = models[ep]
         system = prompts[prompt_key]
 
-        # API 방식에 따른 호출 함수 & 도구 선택
-        if api == "chat":
+        # 엔드포인트 + API 방식에 따른 호출 함수 & 도구 선택
+        if ep == "aoai_azure":
+            call_fn = call_chat_azure_inference
+            tools = CODE_INTERPRETER_TOOL_CHAT if use_tool else None
+        elif api == "chat":
             call_fn = call_chat
             tools = CODE_INTERPRETER_TOOL_CHAT if use_tool else None
         else:
@@ -261,8 +288,8 @@ def collect_env_info(has_openai: bool, has_azure: bool) -> str:
     except Exception:
         pass
     try:
-        import azure.identity as _azid
-        lines.append(f"| azure-identity | {_azid.__version__} |")
+        from azure.ai.inference import __version__ as _azver
+        lines.append(f"| azure-ai-inference | {_azver} |")
     except Exception:
         pass
     lines.append(f"| 테스트 시각 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} |")

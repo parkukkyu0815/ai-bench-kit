@@ -10,8 +10,8 @@
 | 엔드포인트 | 라이브러리 | 설명 |
 |-----------|-----------|------|
 | OpenAI 직접 | `openai` | OpenAI API 직접 호출 |
-| AOAI (openai lib) | `openai` | Azure OpenAI를 openai 라이브러리 + API 키로 호출 |
-| AOAI (azure lib) | `openai` + `azure-identity` | Azure OpenAI를 Azure AD 토큰 인증으로 호출 |
+| AOAI (openai lib) | `openai` (`AzureOpenAI`) | Azure OpenAI를 openai 라이브러리로 호출 |
+| AOAI (azure lib) | `azure-ai-inference` (`ChatCompletionsClient`) | Azure OpenAI를 Azure SDK로 호출 |
 
 > 사내 AI 서비스는 웹 기반이라 API 비교 불가. 추후 별도 측정 예정.
 
@@ -28,7 +28,7 @@ GPT-5 (OpenAI, AOAI 모두 동일 모델)
 | 시스템 프롬프트 | 짧은(~50 tokens) / 긴 보안 한글(~2,000 tokens) |
 | 코드 인터프리터 | OFF / ON |
 
-**총 조합: 3 × 2 × 2 × 2 = 24가지**
+**총 조합: 20가지** (azure-ai-inference는 Chat Completions만 지원 → 8+8+4)
 
 ## 질문 세트 (5개, 난이도 혼합)
 
@@ -46,7 +46,7 @@ GPT-5 (OpenAI, AOAI 모두 동일 모델)
 
 - 질문당 10회 반복
 - 조합당 50회 (5문항 × 10회)
-- **총 호출: 24 × 50 = 1,200회**
+- **총 호출: 20 × 50 = 1,000회**
 
 ## 측정 지표
 
@@ -117,7 +117,7 @@ Markdown 파일 (`results/` 디렉토리) → GitHub에서 바로 확인 가능.
 | OS / 버전 | 자동 |
 | Python 버전 | 자동 |
 | `openai` 라이브러리 버전 | 자동 |
-| `azure-identity` 버전 | 자동 |
+| `azure-ai-inference` 버전 | 자동 |
 | 테스트 시각 | 자동 |
 | Azure 리전 | 자동 (엔드포인트에서 추출) |
 
