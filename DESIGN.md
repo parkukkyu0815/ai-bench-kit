@@ -140,10 +140,26 @@ AZURE_OPENAI_API_VERSION=
 ai-bench-kit/
 ├── DESIGN.md              # 이 문서
 ├── .env.example           # 환경변수 템플릿
-├── requirements.txt       # 의존성 (openai)
+├── .env                   # ← 여기에 키 넣으면 끝
+├── prompts.md             # 시스템 프롬프트 원문 (사람이 읽기 편하게)
+├── requirements.txt       # 의존성 (openai, python-dotenv)
 ├── benchmark.py           # 벤치마크 실행 (단일 파일)
 └── results/               # 결과 마크다운 저장
     └── benchmark_YYYYMMDD_HHMMSS.md
+```
+
+## 실행 방법 (맥 기준, 딸깍)
+
+```bash
+# 1. 의존성 설치 (최초 1회)
+pip install -r requirements.txt
+
+# 2. .env 파일에 키 설정
+cp .env.example .env
+# .env 파일 열어서 키 입력
+
+# 3. 실행
+python benchmark.py
 ```
 
 ## 코드 원칙
