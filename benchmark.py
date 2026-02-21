@@ -159,7 +159,7 @@ ENDPOINT_SUPPORTED_APIS = {
 }
 
 CODE_INTERPRETER_TOOL_CHAT = [{"type": "function", "function": {"name": "code_interpreter", "description": "Run code", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}}}}]
-CODE_INTERPRETER_TOOL_RESPONSES = [{"type": "code_interpreter"}]
+CODE_INTERPRETER_TOOL_RESPONSES = [{"type": "code_interpreter", "container": {"type": "auto"}}]
 
 
 def build_combos():
@@ -199,7 +199,8 @@ def run_benchmark():
     models = {}
     if has_openai:
         clients["openai"] = make_openai_client()
-        models["openai"] = "gpt-5-chat"
+        # OpenAI 모델명은 계정별 가용 모델이 다를 수 있으므로 .env override 허용
+        models["openai"] = os.environ.get("OPENAI_MODEL", "gpt-5-chat-latest")
     if has_azure:
         deploy = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
         clients["aoai_openai"] = make_azure_openai_client()
@@ -212,6 +213,10 @@ def run_benchmark():
     total_calls = len(combos) * len(QUESTIONS) * REPEAT
 
     print(f"🚀 벤치마크 시작 — {len(combos)}개 조합 × {len(QUESTIONS)}문항 × {REPEAT}회 = {total_calls}회 호출")
+    if has_openai:
+        print(f"   ℹ OpenAI 모델: {models['openai']}")
+    if has_azure:
+        print(f"   ℹ Azure 배포: {models['aoai_openai']}")
     if has_azure:
         print(f"   ℹ AOAI (azure lib)은 Chat Completions만 지원 → Responses API 제외")
 
@@ -248,7 +253,14 @@ def run_benchmark():
                     q_measurements.append((ttft, total, text))
                     print(f"  ✓ {label} — TTFT={ttft:.3f}s  Total={total:.3f}s")
                 except Exception as e:
-                    print(f"  ✗ {label} — {e}")
+                    err = str(e)
+                    if hasattr(e, "response") and getattr(e.response, "status_code", None) == 400:
+                        try:
+                            body = e.response.json() if hasattr(e.response, "json") else getattr(e.response, "text", "")
+                            err = f"400 Bad Request — {body}"
+                        except Exception:
+                            pass
+                    print(f"  ✗ {label} — {err}")
             combo_results[q_id] = q_measurements
 
         results[combo] = combo_results
